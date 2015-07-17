@@ -1,3 +1,6 @@
+#### Problem
+A micro service that enables its users to lookup urls in blocklists and whitelists. The blocklists and whitelists could be different formats (domain, urls, url + parameters etc) and could be billions of rows large.
+
 #### Design
 The HTTP service is implemented using tornado.
 Each urlinfo request is first looked up in caches, and if it is a miss, configured databases (potentially of different kinds, storing different block lists) are
