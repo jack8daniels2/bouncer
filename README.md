@@ -4,13 +4,13 @@ A micro service that enables its users to lookup urls in blocklists and whitelis
 #### Design
 The HTTP service is implemented using tornado.
 Each urlinfo request is first looked up in caches, and if it is a miss, configured databases (potentially of different kinds, storing different block lists) are
-queried asynchronously. As soon as the first database responds with a hit, the response is return.
+queried asynchronously. The key to the solution is the AnyCast functionality that allows querying multiple 'storage' asynchronously (server can move on to serving other requests) and in parallel, and allow a service to respond as soon as the first hit is received.
 The response is asynchronously written to the respective cache.
 
 Caches and Databases implement a generic storage interface, VerdictCache and VerdictDB respectively. The difference between the two interfaces is that the VerdictDB lookup is a coroutine and returns a Future. Caches are expected to be quicker and its look up is a blocking call. As an example, I implemented 3 different VerdictDB implementations
-1. bigtable_example uses cassandra
-2. memory_trie maintains a dict[dict[dict[set]]] a trie like structure to store blocklist in memory.
-3. sleeper is just for testing. It sleeps for configured time and then reponds with a hit or miss based on configured probability.
+ 1. bigtable_example uses cassandra
+ 2. memory_trie maintains a dict[dict[dict[set]]] a trie like structure to store blocklist in memory.
+ 3. sleeper is just for testing. It sleeps for configured time and then reponds with a hit or miss based on configured probability.
 
 And I implemented a VerdictCache over redis configured as an LRU (maxmemory and maxmemory-policy).
 Both, the Caches and Databases can be configured using the configuration file.
@@ -23,28 +23,6 @@ Response generation is simplistic. One may decide to enhance it in different way
 - We may also want to keep a hit count for each url, domain etc
 
 Using user specified strings (url) as is in an internal service and database is a bad idea. I'd like to encode the url right away from the service onwards. Encoding TBD.
-
-#####TODO
-Automated Testing, packaging, replace sys.argv usage with optparser, verify url parsing logic.
-
-#####Future expansion
-
-> The size of the URL list could grow infinitely, how might you
-> scale this beyond the memory capacity of this VM? Bonus if you
-> implement this.
-
-The memory_trie storage is an example of how we can maintain the blocklist in memory. I'm not a fan of this idea because scaling and monitoring such an application is not simple.
-One option of scaling a service that maintains the blocklist in memory is to shard the key space and assign them to pools of identical server. A reverse proxy would route the request to the right pool. Use of consistent hashing can avoid reassignment of keyspace. I don't recommend an in-memory solution when we are maintaining an 'infinite' list.
-Therefore, I implemented a generic storage interface backed by redis, cassandra, in memory dict/trie and riak. The key to the solution is the AnyCast functionality that allows querying multiple 'storage' asynchronously (server can move on to serving other requests) and in parallel, and allow a service to respond as soon as the first hit is received. Redis performs pretty well with large key space and so does Cassandra. We can scale to 'infinite' urls by keeping, say cassandra as a persistent storage, redis as a LRU cache, and still keep our average response to < 5msec.
-
-> The number of requests may exceed the capacity of this VM, how
-> might you solve that? Bonus if you implement this.
-
-See above
-
-> What are some strategies you might use to update the service
-> with new URLs? Updates may be as much as 5 thousand URLs a day
-> with updates arriving every 10 minutes.
 
 We can use a message queue that updates the storage. Each update would first write to the database and then invalidate the corresponding cache entries. Writing to cache first ensures that we use the update right away, but it'd require throwing away some good LRU entries. I implemented tools/data_feed.py and tools/data_ingest.py as a prototype using kafka (it doesn't invalidate the cache though.)
 If we were to implement a service that maintains the blacklists in memory then we can upgrade it directly using non-blocking polling (preferrably done by libev).
@@ -66,16 +44,13 @@ def blacklists_update(self, fetch_num_messages):
                              self.blacklists_update, fetch_num_messages)
 ```
 
-> How would you design the system to tolerate component failure
-> such that you can achieve 100% uptime.
-
-I believe that the strength of my solution is that storage and updates are separate services allowing us to scale the HTTP service independently. I'd put many instances of this service behind an HAProxy.
+#####TODO
+Automated Testing, packaging, replace sys.argv usage with optparser, verify url parsing logic.
 
 ####Other ideas
 - Rewrite the service in a more network performant language. Go suits the usecase (and is the rage these days)
 - Consistent read is not paramount for this use case. I'd lean towards using AP databases like Riak or Cassandra. A benefit of using a BigTable database (like Cassandra) is that we can maintain a single row for each domain with path_and_parameters as dynamic columns to limit the number of rows.
 - In order to handle, 'infinite' number of urls, I'd also start thinking about aggregating urls.
-
 
 ######Sample output
 ```
